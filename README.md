@@ -535,6 +535,126 @@ Want to contribute to Cloudflare VibeSDK? Here's how:
 
 ---
 
+## ☁️ Cloudflare Platform Integration
+
+### Service Map
+
+VibeSDK leverages the full breadth of the Cloudflare developer platform:
+
+| Cloudflare Service | Role in VibeSDK | Free Tier Allowance |
+|--------------------|----------------|--------------------|
+| **Workers** | Edge compute runtime, API routing, WebSocket server | 100K requests/day |
+| **Durable Objects** | Stateful AI agent sessions (per-user, per-app) | Unlimited (paid plan) |
+| **D1** | SQLite database for users, sessions, apps, analytics | 5 GB storage |
+| **R2** | Template storage, generated app artifacts, static assets | 10 GB storage |
+| **KV** | Session state, rate limiting, feature flags | 1 GB storage |
+| **AI Gateway** | Unified LLM proxy with caching and rate limiting | Included with Workers |
+| **Containers** | Sandboxed runtime for live app previews | Per-instance billing |
+| **Workers for Platforms** | Dispatch namespace for user-generated app deployments | Requires subscription |
+| **Secrets Store** | Encrypted user-provided API keys (BYOK) | 10 secrets free |
+| **Sentry (via Workers)** | Error tracking and performance monitoring | 5K events/month |
+
+### Request Flow Architecture
+
+```
+User Browser
+    │
+    ▼ (HTTPS)
+┌─────────────────────────────────────────────────────────┐
+│                   Cloudflare Edge Network                │
+│  ┌──────────────┐  ┌───────────────────────────────┐    │
+│  │ Static Assets │  │    Worker (Hono Router)       │    │
+│  │ (R2 + Cache)  │  │  ┌─ Auth Routes              │    │
+│  └──────────────┘  │  ├─ App Routes (CRUD)         │    │
+│                     │  ├─ Agent WebSocket (DO)      │    │
+│                     │  ├─ GitHub Exporter Routes     │    │
+│                     │  ├─ Analytics Routes           │    │
+│                     │  └─ Secret Vault Routes        │    │
+│                     └─────────────┬─────────────────┘    │
+│                                   │                       │
+│  ┌──────────────┐  ┌─────────────▼─────────────────┐    │
+│  │ D1 (SQLite)  │  │    Durable Object (Agent)     │    │
+│  │ Users, Apps  │  │  State machine:               │    │
+│  │ Sessions,    │  │  Idle → Planning → Gen →      │    │
+│  │ Model Config │  │  Preview → Deploying → Done    │    │
+│  └──────────────┘  └─────────────┬─────────────────┘    │
+│                                   │                       │
+│  ┌──────────────┐  ┌─────────────▼─────────────────┐    │
+│  │ R2 (Storage) │  │  AI Gateway → LLM Provider     │    │
+│  │ Templates,   │  │  Google Gemini (default)       │    │
+│  │ Artifacts    │  │  OpenAI, Anthropic, Cerebras   │    │
+│  └──────────────┘  └───────────────────────────────┘    │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Durable Object State Machine
+
+Each AI coding agent is a Durable Object with a finite state machine:
+
+```
+    ┌──────┐   create()   ┌──────────┐  analyze()  ┌──────────┐
+    │ IDLE │─────────────▶│ PLANNING │────────────▶│ GENERATING│
+    └──────┘              └──────────┘             └─────┬─────┘
+       ▲                       ▲                         │
+       │                 user_cancel()            phase_complete()
+       │                       │                         │
+       │              ┌────────┴───┐               ┌─────▼──────┐
+       └──────────────│ CANCELLED  │               │ PREVIEWING│
+                      └────────────┘               └─────┬──────┘
+                                                        │
+                                                  deploy()
+                                                        │
+                                                 ┌──────▼──────┐
+                                                 │ DEPLOYED    │
+                                                 └─────────────┘
+```
+
+### Database Schema (D1/Drizzle)
+
+The platform uses Drizzle ORM with D1 for type-safe database access:
+
+- **`users`** — User profiles, auth provider linkage, created_at
+- **`apps`** — Generated applications (title, description, blueprint JSON, status)
+- **`sessions`** — Chat sessions linked to apps with full message history
+- **`model_providers`** — Per-user LLM provider configurations (BYOK keys stored in Secrets)
+- **`model_configs`** — Model parameters (temperature, max_tokens, system prompts)
+- **`secrets`** — Encrypted user secret mappings (using AES-256 via Web Crypto)
+
+### SDK Integration
+
+The `@cf-vibesdk/sdk` package provides programmatic access:
+
+```typescript
+import { PhasicClient } from '@cf-vibesdk/sdk';
+
+// Create client pointing to your self-hosted instance
+const client = new PhasicClient({
+  baseUrl: 'https://your-instance.your-domain.com',
+  apiKey: process.env.VIBESDK_API_KEY!,
+});
+
+// Build an app with agentic mode
+const session = await client.build('Build a task manager app', {
+  projectType: 'app',
+  autoGenerate: true,
+});
+
+// Stream events in real-time
+session.on('phase:start', (e) => console.log(`Phase: ${e.phase}`));
+session.on('file:created', (e) => console.log(`File: ${e.path}`));
+session.on('preview:ready', (e) => console.log(`Preview: ${e.url}`));
+
+await session.wait.deployable();
+console.log('Deployed:', session.state.previewUrl);
+session.close();
+```
+
+---
+
 ## 📄 License
 
 MIT License - see [LICENSE](LICENSE) for details.
+
+---
+
+<img src="callsign1.jpg" width="128" alt="callsign">
